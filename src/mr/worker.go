@@ -2,6 +2,7 @@ package mr
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -27,28 +28,25 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func doPing(taskId int, done <-chan struct{}) {
+func doTask(worker func(ctx context.Context), taskId int) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go worker(ctx)
 	ticker := time.Tick(clienPingFrequency)
-	for {
-		select {
-		case <-done:
+	for range ticker {
+		req := &Request{}
+		resp := &Response{}
+		req.TaskType = PING
+		req.TaskId = taskId
+		call("Coordinator.GetTask", req, resp)
+		if resp.TaskType == PING_TERMINATE {
+			// master终止了任务
 			break
-		case <-ticker:
-			args := Request{}
-			reply := Response{}
-			args.TaskType = PING
-			args.TaskId = taskId
-			call("Coordinator.GetTask", &args, &reply)
 		}
 	}
+	cancel()
 }
 
-func doMapTask(mapf func(string, string) []KeyValue, r *Response) {
-	// 发送心跳包
-	done := make(chan struct{})
-	defer close(done)
-	go doPing(r.TaskId, done)
-
+func doMapTask(ctx context.Context, mapf func(string, string) []KeyValue, r *Response) {
 	// 获得文件内容
 	content, err := os.ReadFile(r.File[0])
 	if err != nil {
@@ -65,16 +63,25 @@ func doMapTask(mapf func(string, string) []KeyValue, r *Response) {
 
 	files := make([]string, 0, r.NReduce)
 	for i := range hashedKvs {
-		oname := fmt.Sprintf(mapTemFileformat, i, r.TaskId)
-		ofile, _ := os.Create(oname)
-		buf := bufio.NewWriter(ofile)
-		for _, kv := range hashedKvs[i] {
-			data, _ := json.Marshal(kv)
-			buf.Write(data)
+		select {
+		case <-ctx.Done():
+			// master终止了本次任务
+			for _, file := range files {
+				os.Remove(file)
+			}
+			return
+		default:
+			oname := fmt.Sprintf(mapTemFileformat, i, r.TaskId)
+			ofile, _ := os.Create(oname)
+			buf := bufio.NewWriter(ofile)
+			for _, kv := range hashedKvs[i] {
+				data, _ := json.Marshal(kv)
+				buf.Write(data)
+			}
+			buf.Flush()
+			ofile.Close()
+			files = append(files, oname)
 		}
-		buf.Flush()
-		ofile.Close()
-		files = append(files, oname)
 	}
 
 	args := Request{}
@@ -91,12 +98,7 @@ func doMapTask(mapf func(string, string) []KeyValue, r *Response) {
 	}
 }
 
-func doReduceTask(reducef func(string, []string) string, r *Response) {
-	// 发送心跳包
-	done := make(chan struct{})
-	defer close(done)
-	go doPing(r.TaskId, done)
-
+func doReduceTask(ctx context.Context, reducef func(string, []string) string, r *Response) {
 	reduceFileNum := r.ReduceIdx
 	intermediate := shuffle(r.File)
 	dir, _ := os.Getwd()
@@ -105,15 +107,24 @@ func doReduceTask(reducef func(string, []string) string, r *Response) {
 		log.Fatal("Failed to create temp file", err)
 	}
 	defer tempFile.Close()
+	
+	// 执行reduce写入临时文件
 	buf := bufio.NewWriter(tempFile)
 	for i := 0; i < len(intermediate); {
-		key := intermediate[i].Key
-		var values []string
-		for j := i; i < len(intermediate) && intermediate[j].Key == intermediate[i].Key; i++ {
-			values = append(values, intermediate[i].Value)
+		select {
+		case <-ctx.Done():
+			// master终止了本次任务
+			os.Remove(tempFile.Name())
+			return
+		default:
+			key := intermediate[i].Key
+			var values []string
+			for j := i; i < len(intermediate) && intermediate[j].Key == intermediate[i].Key; i++ {
+				values = append(values, intermediate[i].Value)
+			}
+			output := reducef(key, values)
+			buf.WriteString(strings.Join([]string{key, " ", output, "\n"}, ""))
 		}
-		output := reducef(key, values)
-		buf.WriteString(strings.Join([]string{key, " ", output, "\n"}, ""))
 	}
 	buf.Flush()
 
@@ -121,16 +132,18 @@ func doReduceTask(reducef func(string, []string) string, r *Response) {
 	fn := fmt.Sprintf(resultFilenameFormat, reduceFileNum)
 	os.Rename(tempFile.Name(), fn)
 
+	// 报告完成任务
 	args := Request{}
 	reply := Response{}
 	args.TaskType = REDUCE_CONFIRM
 	args.TaskId = r.TaskId
-
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if !ok || reply.TaskType == TASK_FAIL {
 		os.Remove(fn)
+		return
 	}
 
+	// 清理map产生的中间文件
 	for _, file := range r.File {
 		os.Remove(file)
 	}
@@ -175,11 +188,13 @@ func Worker(mapf func(string, string) []KeyValue,
 		}
 		switch reply.TaskType {
 		case MAP_TASK:
-			doMapTask(mapf, reply)
+			doTask(func(ctx context.Context) {
+				doMapTask(ctx, mapf, reply)
+			}, reply.TaskId)
 		case REDUCE_TASK:
-			doReduceTask(reducef, reply)
-		case SLEEP:
-			time.Sleep(clientWaittingDuration)
+			doTask(func(ctx context.Context) {
+				doReduceTask(ctx, reducef, reply)
+			}, reply.TaskId)
 		case EXIT:
 			log.Println("complete task")
 			return

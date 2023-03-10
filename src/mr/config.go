@@ -13,8 +13,5 @@ const serverTimeout = time.Second*5
 // client-ping-frequency
 const clienPingFrequency = time.Second
 
-// client-waitting-duration
-const clientWaittingDuration = time.Millisecond * 200
-
 const resultFilenameFormat = "mr-out-%d"
 
