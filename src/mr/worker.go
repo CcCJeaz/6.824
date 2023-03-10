@@ -10,11 +10,8 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 )
-
-var curTaskId atomic.Int64
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -30,7 +27,28 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func doPing(taskId int, done <-chan struct{}) {
+	ticker := time.Tick(clienPingFrequency)
+	for {
+		select {
+		case <-done:
+			break
+		case <-ticker:
+			args := Request{}
+			reply := Response{}
+			args.TaskType = PING
+			args.TaskId = taskId
+			call("Coordinator.GetTask", &args, &reply)
+		}
+	}
+}
+
 func doMapTask(mapf func(string, string) []KeyValue, r *Response) {
+	// 发送心跳包
+	done := make(chan struct{})
+	defer close(done)
+	go doPing(r.TaskId, done)
+
 	// 获得文件内容
 	content, err := os.ReadFile(r.File[0])
 	if err != nil {
@@ -63,7 +81,7 @@ func doMapTask(mapf func(string, string) []KeyValue, r *Response) {
 	reply := Response{}
 	args.TaskType = MAP_CONFIRM
 	args.File = files
-	args.TaskId = int(curTaskId.Load())
+	args.TaskId = r.TaskId
 
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if !ok || reply.TaskType == TASK_FAIL {
@@ -74,6 +92,11 @@ func doMapTask(mapf func(string, string) []KeyValue, r *Response) {
 }
 
 func doReduceTask(reducef func(string, []string) string, r *Response) {
+	// 发送心跳包
+	done := make(chan struct{})
+	defer close(done)
+	go doPing(r.TaskId, done)
+
 	reduceFileNum := r.ReduceIdx
 	intermediate := shuffle(r.File)
 	dir, _ := os.Getwd()
@@ -86,7 +109,7 @@ func doReduceTask(reducef func(string, []string) string, r *Response) {
 	for i := 0; i < len(intermediate); {
 		key := intermediate[i].Key
 		var values []string
-		for j:=i; i < len(intermediate) && intermediate[j].Key == intermediate[i].Key; i++ {
+		for j := i; i < len(intermediate) && intermediate[j].Key == intermediate[i].Key; i++ {
 			values = append(values, intermediate[i].Value)
 		}
 		output := reducef(key, values)
@@ -101,7 +124,7 @@ func doReduceTask(reducef func(string, []string) string, r *Response) {
 	args := Request{}
 	reply := Response{}
 	args.TaskType = REDUCE_CONFIRM
-	args.TaskId = int(curTaskId.Load())
+	args.TaskId = r.TaskId
 
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if !ok || reply.TaskType == TASK_FAIL {
@@ -139,25 +162,6 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-	curTaskId.Store(-1)
-
-	// 定时ping server
-	done := make(chan struct{})
-	go func() {
-		ticker := time.Tick(clienPingFrequency)
-		for {
-			select {
-			case <-done:
-				break
-			case <-ticker:
-				args := Request{}
-				reply := Response{}
-				args.TaskType = PING
-				args.TaskId = int(curTaskId.Load())
-				call("Coordinator.GetTask", &args, &reply)
-			}
-		}
-	}()
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 	for {
@@ -167,21 +171,16 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		ok := call("Coordinator.GetTask", args, reply)
 		if !ok {
-			close(done)
 			break
 		}
-
 		switch reply.TaskType {
 		case MAP_TASK:
-			curTaskId.Store(int64(reply.TaskId))
 			doMapTask(mapf, reply)
 		case REDUCE_TASK:
-			curTaskId.Store(int64(reply.TaskId))
 			doReduceTask(reducef, reply)
 		case SLEEP:
 			time.Sleep(clientWaittingDuration)
 		case EXIT:
-			close(done)
 			log.Println("complete task")
 			return
 		}
