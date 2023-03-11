@@ -1,0 +1,10 @@
+services:
+  distributed-lab:
+    image: golang:latest
+    container_name: distributed-lab
+    restart: always
+    working_dir: /app
+    volumes:
+      - ".:/app"
+    init: true
+    tty: true
