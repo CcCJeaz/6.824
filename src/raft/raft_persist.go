@@ -20,14 +20,14 @@ func (rf *Raft) persist() {
 
 	e.Encode(rf.log.Len())
 	for i := rf.log.startIndex; i <= rf.log.BackIndex(); i++ {
-		e.Encode(rf.log.GetByIndex(i))
+		e.Encode(rf.log.Get(i))
 	}
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.commitIndex)
 
 	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, rf.persister.ReadSnapshot())
+	rf.persister.SaveRaftState(raftstate)
 }
 
 // restore previously persisted state.
