@@ -80,9 +80,9 @@ func (rf *Raft) startLeader(term int) {
 	rf.briefLogList = nil
 	for i, end := rf.log.FrontIndex(), rf.log.BackIndex(); i <= end; {
 		next := i
-		for ; next <= end && rf.log.GetByIndex(next).Term == rf.log.GetByIndex(i).Term; next++ {
+		for ; next <= end && rf.log.Get(next).Term == rf.log.Get(i).Term; next++ {
 		}
-		rf.briefLogList = append(rf.briefLogList, BriefLogInfo{rf.log.GetByIndex(i).Term, i, next - i})
+		rf.briefLogList = append(rf.briefLogList, BriefLogInfo{rf.log.Get(i).Term, i, next - i})
 		i = next
 	}
 	rf.briefLogList = append(rf.briefLogList, BriefLogInfo{rf.currentTerm, rf.log.BackIndex() + 1, 0})

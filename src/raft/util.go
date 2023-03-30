@@ -87,8 +87,6 @@ func (b *Buffer[T]) grow() {
 	b.rear = originCap - 1
 }
 
-
-
 func (b *Buffer[T]) Push(data T) {
 	if b.IsFull() {
 		b.grow()
@@ -118,6 +116,10 @@ func (b *Buffer[T]) BackIndex() int {
 	return b.startIndex + b.Len() - 1
 }
 
+func (b *Buffer[T]) Front() T {
+	return b.buf[b.front]
+}
+
 func (b *Buffer[T]) Back() T {
 	return b.buf[(b.cap()+b.rear-1)%b.cap()]
 }
@@ -142,19 +144,25 @@ func (b *Buffer[T]) Cut(l, r int) {
 	b.startIndex = l
 }
 
-func (b *Buffer[T]) GetByIndex(index int) T {
+func (b *Buffer[T]) Get(index int) T {
 	if index < b.FrontIndex() || index > b.BackIndex() {
 		panic(fmt.Sprintf("buf[%d] out of range: [%d, %d]\n", index, b.FrontIndex(), b.BackIndex()))
 	}
 	return b.buf[(index-b.startIndex+b.front)%b.cap()]
 }
 
+func (b *Buffer[T]) Set(index int, data T) {
+	if index < b.FrontIndex() || index > b.BackIndex() {
+		panic(fmt.Sprintf("buf[%d] out of range: [%d, %d]\n", index, b.FrontIndex(), b.BackIndex()))
+	}
+	b.buf[(index-b.startIndex+b.front)%b.cap()] = data
+}
 
 func (b *Buffer[T]) String() string {
 	var builder strings.Builder
 	builder.WriteByte('[')
-	for i:=b.FrontIndex(); i<=b.BackIndex(); i++ {
-		builder.WriteString(fmt.Sprint(b.GetByIndex(i), " "))
+	for i := b.FrontIndex(); i <= b.BackIndex(); i++ {
+		builder.WriteString(fmt.Sprint(b.Get(i), " "))
 	}
 	builder.WriteByte(']')
 

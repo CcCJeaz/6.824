@@ -49,15 +49,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesRequest, reply *AppendEntriesRe
 
 	// 领导者发送的日志领先自己 或者 相同索引处日志不同, 返回缩略日志列表
 	if args.PreLogIndex > rf.log.BackIndex() ||
-		args.PreLogTerm != rf.log.GetByIndex(args.PreLogIndex).Term {
+		args.PreLogTerm != rf.log.Get(args.PreLogIndex).Term {
 		reply.Success = false
 		reply.Term = rf.currentTerm
 
 		for i, end := rf.log.FrontIndex(), rf.log.BackIndex(); i <= end; {
 			next := i
-			for ; next <= end && rf.log.GetByIndex(i).Term == rf.log.GetByIndex(next).Term; next++ {
+			for ; next <= end && rf.log.Get(i).Term == rf.log.Get(next).Term; next++ {
 			}
-			reply.BriefLogList = append(reply.BriefLogList, BriefLogInfo{rf.log.GetByIndex(i).Term, i, next - i})
+			reply.BriefLogList = append(reply.BriefLogList, BriefLogInfo{rf.log.Get(i).Term, i, next - i})
 			i = next
 		}
 		return
@@ -66,7 +66,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesRequest, reply *AppendEntriesRe
 	// 需要新添日志 或者 覆盖错误的日志
 	if len(args.Entries) > 0 &&
 		(args.PreLogIndex+len(args.Entries) > rf.log.BackIndex() ||
-			rf.log.GetByIndex(args.PreLogIndex+len(args.Entries)).Term != args.Entries[len(args.Entries)-1].Term) {
+			rf.log.Get(args.PreLogIndex+len(args.Entries)).Term != args.Entries[len(args.Entries)-1].Term) {
 		// 放入日志
 		rf.log.Cut(rf.log.FrontIndex(), args.PreLogIndex+1)
 		for i := range args.Entries {
@@ -82,7 +82,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesRequest, reply *AppendEntriesRe
 		for i := rf.commitIndex + 1; i <= args.LeaderCommit; i++ {
 			msg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log.GetByIndex(i).Command,
+				Command:      rf.log.Get(i).Command,
 				CommandIndex: i,
 			}
 			rf.applyCh <- msg
@@ -107,11 +107,11 @@ func (rf *Raft) notifyHeartbeatPacket(server int) {
 	rf.resetHeartbeatTicker(server)
 
 	// 构造参数
-	preLogIndex, preLogTerm := rf.nextIndex[server]-1, rf.log.GetByIndex(rf.nextIndex[server]-1).Term
+	preLogIndex, preLogTerm := rf.nextIndex[server]-1, rf.log.Get(rf.nextIndex[server]-1).Term
 	entries := []LogEntry{}
 
-	for i, end := preLogIndex + 1, rf.log.BackIndex(); i <= end; i++ {
-		entries = append(entries, *(rf.log.GetByIndex(i)))
+	for i, end := preLogIndex+1, rf.log.BackIndex(); i <= end; i++ {
+		entries = append(entries, *(rf.log.Get(i)))
 	}
 
 	args := &AppendEntriesRequest{
@@ -164,10 +164,10 @@ func (rf *Raft) notifyHeartbeatPacket(server int) {
 		lastCommitIndex := matchArray[(nNode+1)/2-1]
 
 		for i := rf.commitIndex + 1; i <= lastCommitIndex; i++ {
-			DPrintf("(ApplyMsg Term %d Leader %d) Leader apply index %d\tcmd %v\n", rf.currentTerm, rf.leaderId, i, rf.log.GetByIndex(i).Command)
+			DPrintf("(ApplyMsg Term %d Leader %d) Leader apply index %d\tcmd %v\n", rf.currentTerm, rf.leaderId, i, rf.log.Get(i).Command)
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log.GetByIndex(i).Command,
+				Command:      rf.log.Get(i).Command,
 				CommandIndex: i,
 			}
 		}
